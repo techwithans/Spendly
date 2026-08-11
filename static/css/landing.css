@@ -1,0 +1,213 @@
+/* ------------------------------------------------------------------ */
+/* Hero (redesign) — overrides the base .hero styles for the landing   */
+/* page only.                                                          */
+/* ------------------------------------------------------------------ */
+
+.hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    text-align: center;
+    max-width: 760px;
+    margin: 0 auto;
+    min-height: 87vh;
+    padding: 0.5rem 2rem;
+}
+
+.hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #e3f9ef;
+    color: #0f9d63;
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 0.45rem 1rem;
+    border-radius: 999px;
+    margin-bottom: 0.4rem;
+}
+
+.hero-badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #0f9d63;
+}
+
+.hero-title {
+    font-family: var(--font-body);
+    font-weight: 700;
+    font-size: clamp(2.25rem, 5vw, 3.25rem);
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin-bottom: 0.5rem;
+}
+
+.hero-title-accent {
+    color: #0f9d63;
+}
+
+.hero-subtitle {
+    font-size: 1.05rem;
+    color: var(--ink-muted);
+    line-height: 1.6;
+    max-width: 480px;
+    margin: 0 auto 0.75rem;
+}
+
+.hero-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-bottom: 0.75rem;
+}
+
+.hero-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.85rem 1.75rem;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: background 0.2s, opacity 0.2s;
+}
+
+.hero-btn-primary {
+    background: var(--ink);
+    color: var(--paper);
+}
+
+.hero-btn-primary:hover { background: var(--accent); }
+
+.hero-btn-secondary {
+    background: var(--ink);
+    color: var(--paper);
+    opacity: 0.85;
+}
+
+.hero-btn-secondary:hover { opacity: 1; }
+
+.hero-visual {
+    width: 100%;
+}
+
+/* ------------------------------------------------------------------ */
+/* Dashboard mock card                                                 */
+/* ------------------------------------------------------------------ */
+
+.mock-card {
+    background: var(--paper-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    width: 100%;
+    max-width: 700px;
+    margin: 0 auto;
+    padding-bottom: 1.75rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
+    text-align: left;
+    overflow: hidden;
+}
+
+.mock-card-chrome {
+    display: flex;
+    gap: 0.4rem;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border-soft);
+    margin-bottom: 1.5rem;
+}
+
+.mock-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+.mock-dot-red { background: #ff5f56; }
+.mock-dot-yellow { background: #ffbd2e; }
+.mock-dot-green { background: #27c93f; }
+
+.mock-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    padding: 0 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.mock-stat {
+    background: var(--paper);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.mock-stat-label {
+    font-size: 0.8rem;
+    color: var(--ink-muted);
+}
+
+.mock-stat-value {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--ink);
+}
+
+.mock-stat-delta {
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+}
+
+.mock-stat-delta-pos { color: #1a9c5a; }
+.mock-stat-delta-neg { color: #d64545; }
+
+.mock-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 0 1.5rem;
+}
+
+.mock-bar-row {
+    display: grid;
+    grid-template-columns: 70px 1fr;
+    align-items: center;
+    gap: 1rem;
+}
+
+.mock-cat {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--ink-soft);
+}
+
+.mock-bar-track {
+    height: 8px;
+    background: var(--border-soft);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.mock-bar {
+    height: 100%;
+    border-radius: 999px;
+}
+
+.mock-bar-food { background: #f5a623; }
+.mock-bar-travel { background: #3b82f6; }
+.mock-bar-bills { background: #8b5cf6; }
+
+/* ------------------------------------------------------------------ */
+/* Responsive                                                          */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 600px) {
+    .hero-actions { flex-direction: column; width: 100%; }
+    .hero-btn { width: 100%; }
+    .mock-stats { grid-template-columns: 1fr; }
+}
