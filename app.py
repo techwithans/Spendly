@@ -22,7 +22,7 @@ def landing():
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if session.get("user_id"):
-        return redirect(url_for("landing"))
+        return redirect(url_for("profile"))
 
     if request.method != "POST":
         return render_template("register.html")
@@ -76,7 +76,7 @@ def register():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if session.get("user_id"):
-        return redirect(url_for("landing"))
+        return redirect(url_for("profile"))
 
     if request.method != "POST":
         return render_template("login.html")
@@ -94,7 +94,7 @@ def login():
 
     session["user_id"] = user["id"]
     session["name"] = user["name"]
-    return redirect(url_for("landing"))
+    return redirect(url_for("profile"))
 
 
 @app.route("/logout")
@@ -113,14 +113,49 @@ def privacy():
     return render_template("privacy.html")
 
 
+@app.route("/profile")
+def profile():
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    user = {
+        "name": "Demo User",
+        "email": "demo@spendly.com",
+        "member_since": "August 2026",
+        "initials": "DU",
+    }
+    stats = {
+        "total_spent": "PKR 18,240",
+        "transaction_count": 34,
+        "top_category": "Food",
+    }
+    transactions = [
+        {"date": "Aug 12", "description": "Weekly grocery shopping", "category": "Food", "amount": "PKR 850"},
+        {"date": "Aug 10", "description": "Uber ride to office", "category": "Transport", "amount": "PKR 350"},
+        {"date": "Aug 8", "description": "Electricity bill", "category": "Bills", "amount": "PKR 4,500"},
+        {"date": "Aug 6", "description": "Pharmacy - medicines", "category": "Health", "amount": "PKR 1,200"},
+        {"date": "Aug 4", "description": "New shoes", "category": "Shopping", "amount": "PKR 3,200"},
+    ]
+    categories = [
+        {"name": "Food", "amount": "PKR 6,540", "bar_class": "bar-w-78"},
+        {"name": "Bills", "amount": "PKR 5,020", "bar_class": "bar-w-60"},
+        {"name": "Shopping", "amount": "PKR 3,540", "bar_class": "bar-w-42"},
+        {"name": "Health", "amount": "PKR 2,540", "bar_class": "bar-w-30"},
+        {"name": "Transport", "amount": "PKR 1,600", "bar_class": "bar-w-18"},
+    ]
+
+    return render_template(
+        "profile.html",
+        user=user,
+        stats=stats,
+        transactions=transactions,
+        categories=categories,
+    )
+
+
 # ------------------------------------------------------------------ #
 # Placeholder routes — students will implement these                  #
 # ------------------------------------------------------------------ #
-
-@app.route("/profile")
-def profile():
-    return "Profile page — coming in Step 4"
-
 
 @app.route("/expenses/add")
 def add_expense():
