@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from datetime import datetime
 
 from flask import Flask, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -113,36 +114,148 @@ def privacy():
     return render_template("privacy.html")
 
 
+# ------------------------------------------------------------------ #
+# Profile data helpers (see .claude/specs/05-profile-backend-routes.md) #
+# ------------------------------------------------------------------ #
+
+def _get_profile_user(conn, user_id):
+    """User info card: name, email, member_since, initials."""
+    row = conn.execute(
+        "SELECT name, email, created_at FROM users WHERE id = ?", (user_id,)
+    ).fetchone()
+    initials = "".join(part[0].upper() for part in row["name"].split()[:2])
+    created = datetime.strptime(row["created_at"][:10], "%Y-%m-%d")
+    return {
+        "name": row["name"],
+        "email": row["email"],
+        "member_since": created.strftime("%B %Y"),
+        "initials": initials,
+    }
+
+
+def _get_profile_transactions(conn, user_id):
+    """Subagent 1: most recent transactions for the profile table.
+
+    Return a list of dicts shaped like:
+        {"date": "Aug 12", "description": "...", "category": "Food", "amount": "PKR 850"}
+    ordered most-recent-first, limited to a small fixed count (e.g. 5).
+    See .claude/specs/05-profile-backend-routes.md for the full contract.
+    """
+    rows = conn.execute(
+        "SELECT date, description, category, amount FROM expenses "
+        "WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT 5",
+        (user_id,),
+    ).fetchall()
+
+    transactions = []
+    for row in rows:
+        d = datetime.strptime(row["date"], "%Y-%m-%d")
+        formatted_date = f"{d.strftime('%b')} {d.day}"
+        transactions.append(
+            {
+                "date": formatted_date,
+                "description": row["description"],
+                "category": row["category"],
+                "amount": "PKR {:,.0f}".format(row["amount"]),
+            }
+        )
+
+    return transactions
+
+
+def _get_profile_stats(conn, user_id):
+    """Subagent 2: summary stats row (total_spent, transaction_count, top_category).
+
+    Return a dict shaped like:
+        {"total_spent": "PKR 18,240", "transaction_count": 34, "top_category": "Food"}
+    Must handle the zero-expenses case without raising.
+    See .claude/specs/05-profile-backend-routes.md for the full contract.
+    """
+    total_row = conn.execute(
+        "SELECT SUM(amount) AS total FROM expenses WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    total = total_row["total"] if total_row["total"] is not None else 0
+    total_spent = "PKR {:,.0f}".format(total)
+
+    count_row = conn.execute(
+        "SELECT COUNT(*) AS n FROM expenses WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    transaction_count = count_row["n"]
+
+    top_row = conn.execute(
+        "SELECT category, SUM(amount) AS total FROM expenses "
+        "WHERE user_id = ? GROUP BY category ORDER BY total DESC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    top_category = top_row["category"] if top_row is not None else "—"
+
+    return {
+        "total_spent": total_spent,
+        "transaction_count": transaction_count,
+        "top_category": top_category,
+    }
+
+
+def _get_profile_categories(conn, user_id):
+    """Subagent 3: per-category breakdown rows.
+
+    Return a list of dicts shaped like:
+        {"name": "Food", "amount": "PKR 6,540", "bar_class": "bar-w-78"}
+    one per category the user has spent in. `bar_class` must be one of the
+    existing CSS classes in static/css/style.css (bar-w-18/30/42/60/78) —
+    pick the nearest one to that category's percentage share of total spend.
+    See .claude/specs/05-profile-backend-routes.md for the full contract.
+    """
+    rows = conn.execute(
+        "SELECT category, SUM(amount) AS total FROM expenses "
+        "WHERE user_id = ? GROUP BY category ORDER BY total DESC",
+        (user_id,),
+    ).fetchall()
+
+    grand_total = sum(row["total"] for row in rows)
+
+    bar_classes = [
+        (18, "bar-w-18"),
+        (30, "bar-w-30"),
+        (42, "bar-w-42"),
+        (60, "bar-w-60"),
+        (78, "bar-w-78"),
+    ]
+
+    def _nearest_bar_class(pct):
+        return min(bar_classes, key=lambda pair: abs(pair[0] - pct))[1]
+
+    categories = []
+    for row in rows:
+        total = row["total"]
+        pct = (total / grand_total * 100) if grand_total else 0
+        categories.append(
+            {
+                "name": row["category"],
+                "amount": "PKR {:,.0f}".format(total),
+                "bar_class": _nearest_bar_class(pct),
+            }
+        )
+
+    return categories
+
+
 @app.route("/profile")
 def profile():
     if not session.get("user_id"):
         return redirect(url_for("login"))
 
-    user = {
-        "name": "Demo User",
-        "email": "demo@spendly.com",
-        "member_since": "August 2026",
-        "initials": "DU",
-    }
-    stats = {
-        "total_spent": "PKR 18,240",
-        "transaction_count": 34,
-        "top_category": "Food",
-    }
-    transactions = [
-        {"date": "Aug 12", "description": "Weekly grocery shopping", "category": "Food", "amount": "PKR 850"},
-        {"date": "Aug 10", "description": "Uber ride to office", "category": "Transport", "amount": "PKR 350"},
-        {"date": "Aug 8", "description": "Electricity bill", "category": "Bills", "amount": "PKR 4,500"},
-        {"date": "Aug 6", "description": "Pharmacy - medicines", "category": "Health", "amount": "PKR 1,200"},
-        {"date": "Aug 4", "description": "New shoes", "category": "Shopping", "amount": "PKR 3,200"},
-    ]
-    categories = [
-        {"name": "Food", "amount": "PKR 6,540", "bar_class": "bar-w-78"},
-        {"name": "Bills", "amount": "PKR 5,020", "bar_class": "bar-w-60"},
-        {"name": "Shopping", "amount": "PKR 3,540", "bar_class": "bar-w-42"},
-        {"name": "Health", "amount": "PKR 2,540", "bar_class": "bar-w-30"},
-        {"name": "Transport", "amount": "PKR 1,600", "bar_class": "bar-w-18"},
-    ]
+    user_id = session["user_id"]
+    conn = get_db()
+
+    user = _get_profile_user(conn, user_id)
+    stats = _get_profile_stats(conn, user_id)
+    transactions = _get_profile_transactions(conn, user_id)
+    categories = _get_profile_categories(conn, user_id)
+
+    conn.close()
 
     return render_template(
         "profile.html",
