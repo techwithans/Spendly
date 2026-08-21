@@ -1,6 +1,7 @@
+import calendar
 import os
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 
 from flask import Flask, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -118,6 +119,71 @@ def privacy():
 # Profile data helpers (see .claude/specs/05-profile-backend-routes.md) #
 # ------------------------------------------------------------------ #
 
+def _shift_months(d, months):
+    """Shift `d` back by `months` calendar months, clamping the day of
+    month to the shifted month's length (e.g. Aug 31 - 6mo -> Feb 28/29)."""
+    month_index = d.month - 1 - months
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    last_day = calendar.monthrange(year, month)[1]
+    day = min(d.day, last_day)
+    return date(year, month, day)
+
+
+def _profile_presets():
+    """Quick-select date ranges for the profile filter bar, anchored on today."""
+    today = date.today()
+    return {
+        "month": (today.replace(day=1).isoformat(), today.isoformat()),
+        "3months": (_shift_months(today, 3).isoformat(), today.isoformat()),
+        "6months": (_shift_months(today, 6).isoformat(), today.isoformat()),
+    }
+
+
+def _resolve_date_filter(args, presets):
+    """Validate date_from/date_to query args into a filter dict.
+
+    Any missing, malformed, or inverted (start > end) range silently falls
+    back to the unfiltered "all" state rather than raising or erroring —
+    this app has no flash-message convention to surface such errors with.
+    """
+    date_from = (args.get("date_from") or "").strip()
+    date_to = (args.get("date_to") or "").strip()
+
+    if not date_from or not date_to:
+        return {"start": None, "end": None, "active": "all"}
+
+    try:
+        parsed_from = datetime.strptime(date_from, "%Y-%m-%d").date()
+        parsed_to = datetime.strptime(date_to, "%Y-%m-%d").date()
+    except ValueError:
+        return {"start": None, "end": None, "active": "all"}
+
+    if parsed_from > parsed_to:
+        return {"start": None, "end": None, "active": "all"}
+
+    start, end = parsed_from.isoformat(), parsed_to.isoformat()
+
+    active = "custom"
+    for name, bounds in presets.items():
+        if (start, end) == bounds:
+            active = name
+            break
+
+    return {"start": start, "end": end, "active": active}
+
+
+def _date_filter_clause(user_id, start_date, end_date):
+    """Build a WHERE clause + params list scoping expenses to a user,
+    optionally narrowed to an inclusive date range."""
+    clause = "WHERE user_id = ?"
+    params = [user_id]
+    if start_date and end_date:
+        clause += " AND date >= ? AND date <= ?"
+        params += [start_date, end_date]
+    return clause, params
+
+
 def _get_profile_user(conn, user_id):
     """User info card: name, email, member_since, initials."""
     row = conn.execute(
@@ -133,7 +199,7 @@ def _get_profile_user(conn, user_id):
     }
 
 
-def _get_profile_transactions(conn, user_id):
+def _get_profile_transactions(conn, user_id, start_date=None, end_date=None):
     """Subagent 1: most recent transactions for the profile table.
 
     Return a list of dicts shaped like:
@@ -141,10 +207,12 @@ def _get_profile_transactions(conn, user_id):
     ordered most-recent-first, limited to a small fixed count (e.g. 5).
     See .claude/specs/05-profile-backend-routes.md for the full contract.
     """
+    where_clause, params = _date_filter_clause(user_id, start_date, end_date)
+
     rows = conn.execute(
-        "SELECT date, description, category, amount FROM expenses "
-        "WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT 5",
-        (user_id,),
+        f"SELECT date, description, category, amount FROM expenses "
+        f"{where_clause} ORDER BY date DESC, id DESC LIMIT 5",
+        params,
     ).fetchall()
 
     transactions = []
@@ -163,7 +231,7 @@ def _get_profile_transactions(conn, user_id):
     return transactions
 
 
-def _get_profile_stats(conn, user_id):
+def _get_profile_stats(conn, user_id, start_date=None, end_date=None):
     """Subagent 2: summary stats row (total_spent, transaction_count, top_category).
 
     Return a dict shaped like:
@@ -171,23 +239,25 @@ def _get_profile_stats(conn, user_id):
     Must handle the zero-expenses case without raising.
     See .claude/specs/05-profile-backend-routes.md for the full contract.
     """
+    where_clause, params = _date_filter_clause(user_id, start_date, end_date)
+
     total_row = conn.execute(
-        "SELECT SUM(amount) AS total FROM expenses WHERE user_id = ?",
-        (user_id,),
+        f"SELECT SUM(amount) AS total FROM expenses {where_clause}",
+        params,
     ).fetchone()
     total = total_row["total"] if total_row["total"] is not None else 0
     total_spent = "PKR {:,.0f}".format(total)
 
     count_row = conn.execute(
-        "SELECT COUNT(*) AS n FROM expenses WHERE user_id = ?",
-        (user_id,),
+        f"SELECT COUNT(*) AS n FROM expenses {where_clause}",
+        params,
     ).fetchone()
     transaction_count = count_row["n"]
 
     top_row = conn.execute(
-        "SELECT category, SUM(amount) AS total FROM expenses "
-        "WHERE user_id = ? GROUP BY category ORDER BY total DESC LIMIT 1",
-        (user_id,),
+        f"SELECT category, SUM(amount) AS total FROM expenses "
+        f"{where_clause} GROUP BY category ORDER BY total DESC LIMIT 1",
+        params,
     ).fetchone()
     top_category = top_row["category"] if top_row is not None else "—"
 
@@ -198,7 +268,7 @@ def _get_profile_stats(conn, user_id):
     }
 
 
-def _get_profile_categories(conn, user_id):
+def _get_profile_categories(conn, user_id, start_date=None, end_date=None):
     """Subagent 3: per-category breakdown rows.
 
     Return a list of dicts shaped like:
@@ -208,10 +278,12 @@ def _get_profile_categories(conn, user_id):
     pick the nearest one to that category's percentage share of total spend.
     See .claude/specs/05-profile-backend-routes.md for the full contract.
     """
+    where_clause, params = _date_filter_clause(user_id, start_date, end_date)
+
     rows = conn.execute(
-        "SELECT category, SUM(amount) AS total FROM expenses "
-        "WHERE user_id = ? GROUP BY category ORDER BY total DESC",
-        (user_id,),
+        f"SELECT category, SUM(amount) AS total FROM expenses "
+        f"{where_clause} GROUP BY category ORDER BY total DESC",
+        params,
     ).fetchall()
 
     grand_total = sum(row["total"] for row in rows)
@@ -248,12 +320,15 @@ def profile():
         return redirect(url_for("login"))
 
     user_id = session["user_id"]
+    presets = _profile_presets()
+    date_filter = _resolve_date_filter(request.args, presets)
+
     conn = get_db()
 
     user = _get_profile_user(conn, user_id)
-    stats = _get_profile_stats(conn, user_id)
-    transactions = _get_profile_transactions(conn, user_id)
-    categories = _get_profile_categories(conn, user_id)
+    stats = _get_profile_stats(conn, user_id, date_filter["start"], date_filter["end"])
+    transactions = _get_profile_transactions(conn, user_id, date_filter["start"], date_filter["end"])
+    categories = _get_profile_categories(conn, user_id, date_filter["start"], date_filter["end"])
 
     conn.close()
 
@@ -263,6 +338,8 @@ def profile():
         stats=stats,
         transactions=transactions,
         categories=categories,
+        date_filter=date_filter,
+        presets=presets,
     )
 
 
