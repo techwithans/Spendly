@@ -16,6 +16,34 @@
             </div>
         </div>
 
+        <div class="filter-bar">
+            <div class="filter-bar-label">
+                <i data-lucide="calendar" class="filter-bar-icon"></i>
+                <span>Date range</span>
+            </div>
+
+            <div class="filter-presets">
+                <a href="{{ url_for('profile', date_from=presets.month[0], date_to=presets.month[1]) }}"
+                   class="filter-chip {% if date_filter.active == 'month' %}filter-chip-active{% endif %}">This Month</a>
+                <a href="{{ url_for('profile', date_from=presets['3months'][0], date_to=presets['3months'][1]) }}"
+                   class="filter-chip {% if date_filter.active == '3months' %}filter-chip-active{% endif %}">Last 3 Months</a>
+                <a href="{{ url_for('profile', date_from=presets['6months'][0], date_to=presets['6months'][1]) }}"
+                   class="filter-chip {% if date_filter.active == '6months' %}filter-chip-active{% endif %}">Last 6 Months</a>
+                <a href="{{ url_for('profile') }}"
+                   class="filter-chip {% if date_filter.active == 'all' %}filter-chip-active{% endif %}">All Time</a>
+            </div>
+
+            <form class="filter-custom {% if date_filter.active == 'custom' %}filter-custom-active{% endif %}"
+                  method="get" action="{{ url_for('profile') }}">
+                <input type="date" name="date_from" class="filter-date-input"
+                       value="{{ date_filter.start or '' }}" aria-label="Start date">
+                <span class="filter-range-sep">&ndash;</span>
+                <input type="date" name="date_to" class="filter-date-input"
+                       value="{{ date_filter.end or '' }}" aria-label="End date">
+                <button type="submit" class="btn-primary filter-apply">Apply</button>
+            </form>
+        </div>
+
         <div class="profile-stats">
             <div class="stat-tile">
                 <span class="stat-label"><i data-lucide="wallet" class="stat-icon"></i>Total spent</span>
