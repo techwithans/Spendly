@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Analytics — Spendly{% endblock %}
+
+{% block content %}
+
+<section class="coming-soon-section">
+    <div class="coming-soon-card">
+
+        <div class="coming-soon-icon">
+            <i data-lucide="rocket"></i>
+        </div>
+
+        <h1 class="coming-soon-title">Coming Soon</h1>
+        <p class="coming-soon-tag">Advanced Analytics</p>
+
+        <p class="coming-soon-desc">
+            Get deeper insights into your spending habits with AI-powered
+            analytics, custom reports, and predictive budgeting.
+        </p>
+
+        <div class="coming-soon-features">
+            <div class="coming-soon-feature">
+                <span class="coming-soon-feature-icon"><i data-lucide="check"></i></span>
+                <span>AI Spending Insights</span>
+            </div>
+            <div class="coming-soon-feature">
+                <span class="coming-soon-feature-icon"><i data-lucide="check"></i></span>
+                <span>Custom Report Builder</span>
+            </div>
+            <div class="coming-soon-feature">
+                <span class="coming-soon-feature-icon"><i data-lucide="check"></i></span>
+                <span>Predictive Budgeting</span>
+            </div>
+            <div class="coming-soon-feature">
+                <span class="coming-soon-feature-icon"><i data-lucide="check"></i></span>
+                <span>Export &amp; Share</span>
+            </div>
+        </div>
+
+        <a href="#" class="btn-primary coming-soon-cta">Notify Me When It's Ready</a>
+        <a href="{{ url_for('profile') }}" class="coming-soon-back">Back to Dashboard</a>
+
+    </div>
+</section>
+
+{% endblock %}

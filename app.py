@@ -1,4 +1,5 @@
 import calendar
+import math
 import os
 import sqlite3
 from datetime import date, datetime
@@ -6,7 +7,7 @@ from datetime import date, datetime
 from flask import Flask, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from database.db import get_db, init_db, seed_db
+from database.db import CATEGORIES, get_db, init_db, seed_db
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
@@ -103,6 +104,13 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("landing"))
+
+
+@app.route("/analytics")
+def analytics():
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+    return render_template("analytics.html")
 
 
 @app.route("/terms")
@@ -343,14 +351,75 @@ def profile():
     )
 
 
+@app.route("/expenses/add", methods=["GET", "POST"])
+def add_expense():
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    today = date.today().isoformat()
+
+    if request.method != "POST":
+        return render_template(
+            "add_expense.html",
+            categories=CATEGORIES,
+            today=today,
+            amount="",
+            category="",
+            date=today,
+            description="",
+        )
+
+    amount = request.form.get("amount", "").strip()
+    category = request.form.get("category", "").strip()
+    expense_date = request.form.get("date", "").strip()
+    description = request.form.get("description", "").strip()
+
+    def _rerender(error):
+        return render_template(
+            "add_expense.html",
+            error=error,
+            categories=CATEGORIES,
+            today=today,
+            amount=amount,
+            category=category,
+            date=expense_date,
+            description=description,
+        )
+
+    try:
+        amount_value = float(amount)
+    except ValueError:
+        return _rerender("Enter a valid amount.")
+
+    if not math.isfinite(amount_value) or amount_value <= 0:
+        return _rerender("Amount must be a positive number.")
+
+    if category not in CATEGORIES:
+        return _rerender("Select a valid category.")
+
+    try:
+        parsed_date = datetime.strptime(expense_date, "%Y-%m-%d").date()
+    except ValueError:
+        return _rerender("Enter a valid date.")
+
+    if parsed_date > date.today():
+        return _rerender("Date cannot be in the future.")
+
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO expenses (user_id, amount, category, date, description) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (session["user_id"], amount_value, category, expense_date, description or None),
+    )
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("profile"))
+
+
 # ------------------------------------------------------------------ #
 # Placeholder routes — students will implement these                  #
 # ------------------------------------------------------------------ #
-
-@app.route("/expenses/add")
-def add_expense():
-    return "Add expense — coming in Step 7"
-
 
 @app.route("/expenses/<int:id>/edit")
 def edit_expense(id):
