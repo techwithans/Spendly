@@ -4,7 +4,7 @@ import os
 import sqlite3
 from datetime import date, datetime
 
-from flask import Flask, redirect, render_template, request, session, url_for
+from flask import Flask, abort, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from database.db import CATEGORIES, get_db, init_db, seed_db
@@ -218,7 +218,7 @@ def _get_profile_transactions(conn, user_id, start_date=None, end_date=None):
     where_clause, params = _date_filter_clause(user_id, start_date, end_date)
 
     rows = conn.execute(
-        f"SELECT date, description, category, amount FROM expenses "
+        f"SELECT id, date, description, category, amount FROM expenses "
         f"{where_clause} ORDER BY date DESC, id DESC LIMIT 5",
         params,
     ).fetchall()
@@ -229,6 +229,7 @@ def _get_profile_transactions(conn, user_id, start_date=None, end_date=None):
         formatted_date = f"{d.strftime('%b')} {d.day}"
         transactions.append(
             {
+                "id": row["id"],
                 "date": formatted_date,
                 "description": row["description"],
                 "category": row["category"],
@@ -417,14 +418,89 @@ def add_expense():
     return redirect(url_for("profile"))
 
 
+@app.route("/expenses/<int:id>/edit", methods=["GET", "POST"])
+def edit_expense(id):
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    expense = conn.execute(
+        "SELECT id, amount, category, date, description FROM expenses "
+        "WHERE id = ? AND user_id = ?",
+        (id, session["user_id"]),
+    ).fetchone()
+
+    if expense is None:
+        conn.close()
+        abort(404)
+
+    today = date.today().isoformat()
+
+    if request.method != "POST":
+        conn.close()
+        return render_template(
+            "edit_expense.html",
+            expense_id=id,
+            categories=CATEGORIES,
+            today=today,
+            amount=expense["amount"],
+            category=expense["category"],
+            date=expense["date"],
+            description=expense["description"] or "",
+        )
+
+    amount = request.form.get("amount", "").strip()
+    category = request.form.get("category", "").strip()
+    expense_date = request.form.get("date", "").strip()
+    description = request.form.get("description", "").strip()
+
+    def _rerender(error):
+        conn.close()
+        return render_template(
+            "edit_expense.html",
+            error=error,
+            expense_id=id,
+            categories=CATEGORIES,
+            today=today,
+            amount=amount,
+            category=category,
+            date=expense_date,
+            description=description,
+        )
+
+    try:
+        amount_value = float(amount)
+    except ValueError:
+        return _rerender("Enter a valid amount.")
+
+    if not math.isfinite(amount_value) or amount_value <= 0:
+        return _rerender("Amount must be a positive number.")
+
+    if category not in CATEGORIES:
+        return _rerender("Select a valid category.")
+
+    try:
+        parsed_date = datetime.strptime(expense_date, "%Y-%m-%d").date()
+    except ValueError:
+        return _rerender("Enter a valid date.")
+
+    if parsed_date > date.today():
+        return _rerender("Date cannot be in the future.")
+
+    conn.execute(
+        "UPDATE expenses SET amount = ?, category = ?, date = ?, description = ? "
+        "WHERE id = ? AND user_id = ?",
+        (amount_value, category, expense_date, description or None, id, session["user_id"]),
+    )
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("profile"))
+
+
 # ------------------------------------------------------------------ #
 # Placeholder routes — students will implement these                  #
 # ------------------------------------------------------------------ #
-
-@app.route("/expenses/<int:id>/edit")
-def edit_expense(id):
-    return "Edit expense — coming in Step 8"
-
 
 @app.route("/expenses/<int:id>/delete")
 def delete_expense(id):
