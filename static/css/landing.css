@@ -279,3 +279,12 @@
     .hero-btn { width: 100%; }
     .mock-stats { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 480px) {
+    .hero { padding: 0.5rem 1rem; }
+    .hero-badge { font-size: 0.78rem; padding: 0.4rem 0.85rem; text-align: center; }
+    .mock-card-chrome { padding: 0.85rem 1rem; }
+    .mock-stats { padding: 0 1rem; }
+    .mock-bars { padding: 0 1rem; }
+    .mock-bar-row { grid-template-columns: 56px 1fr; gap: 0.5rem; }
+}
