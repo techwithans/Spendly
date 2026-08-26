@@ -29,12 +29,26 @@ banners, none of which exist in this codebase):
   fields.
 
 Notes on fixtures:
-`database/db.py`'s `get_db()` reads a module-level `DB_PATH` constant
-(not `app.config['DATABASE']`) and always points at a single file on
-disk. To get per-test isolation we monkeypatch `database.db.DB_PATH` to
-a fresh temp file before calling `init_db()`. Because `get_db()` looks
-up `DB_PATH` as a module global at call time, this works regardless of
-how other modules imported `get_db`.
+`database/db.py` exposes two connection paths: `get_db()` (raw psycopg2,
+`DATABASE_URL`) used here only for `init_db()` and truncate-based test
+isolation, since `TRUNCATE` has no query-builder equivalent; and
+`get_client()` (supabase-py, `SUPABASE_URL`/`SUPABASE_KEY`) used for
+every actual read/write, matching how `app.py` talks to the database.
+There is no per-test throwaway file the way SQLite had — isolation is
+achieved by truncating `users`/`expenses` (and resetting their identity
+sequences) before every test, so each test starts from an empty pair of
+tables in the same real database. This means running these tests
+requires a reachable `DATABASE_URL` and `SUPABASE_URL`/`SUPABASE_KEY`
+(ideally a dedicated test project, not production) — a known tradeoff of
+moving off a local SQLite file.
+
+Note on the SQL-injection test below: with all app-layer queries now
+going through supabase-py's query builder (which always parameterizes
+via `.eq()`/`.gte()`/`.lte()`), raw string interpolation is no longer
+even possible in the current code. That test now guards against a
+hypothetical future regression (e.g. someone reintroducing raw SQL)
+rather than exercising today's code path directly — still worth keeping
+as a regression guard.
 """
 
 import os
@@ -59,16 +73,28 @@ DEFAULT_PASSWORD = "password123"
 # --------------------------------------------------------------------- #
 
 @pytest.fixture
-def app(tmp_path, monkeypatch):
-    db_path = tmp_path / "test_spendly.db"
-    monkeypatch.setattr(db_module, "DB_PATH", str(db_path))
+def app():
     db_module.init_db()
+    conn = db_module.get_db()
+    cursor = conn.cursor()
+    cursor.execute("TRUNCATE TABLE expenses, users RESTART IDENTITY CASCADE")
+    conn.commit()
+    conn.close()
 
     flask_app.config.update({
         "TESTING": True,
         "SECRET_KEY": "test-secret",
     })
     yield flask_app
+
+    # Truncating public.users does not touch Supabase Auth's own auth.users
+    # table, so each test's register() calls leave orphaned Auth users behind.
+    # Clean those up here or they accumulate across runs and eventually
+    # collide on "email_exists" for repeated test emails.
+    supabase = db_module.get_client()
+    for user in supabase.auth.admin.list_users():
+        if user.email and user.email.endswith("@example.com"):
+            supabase.auth.admin.delete_user(user.id)
 
 
 @pytest.fixture
@@ -108,22 +134,23 @@ def register_and_login(client, name, email, password=DEFAULT_PASSWORD):
 
 
 def get_user_id(email):
-    conn = db_module.get_db()
-    row = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
-    conn.close()
-    assert row is not None, f"Expected a user row for {email}"
-    return row["id"]
+    supabase = db_module.get_client()
+    response = supabase.table("users").select("id").eq("email", email).execute()
+    assert response.data, f"Expected a user row for {email}"
+    return response.data[0]["id"]
 
 
 def insert_expense(user_id, amount, category, date_str, description):
-    conn = db_module.get_db()
-    conn.execute(
-        "INSERT INTO expenses (user_id, amount, category, date, description) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (user_id, amount, category, date_str, description),
-    )
-    conn.commit()
-    conn.close()
+    supabase = db_module.get_client()
+    supabase.table("expenses").insert(
+        {
+            "user_id": user_id,
+            "amount": amount,
+            "category": category,
+            "date": date_str,
+            "description": description,
+        }
+    ).execute()
 
 
 def html_of(response):
@@ -328,12 +355,9 @@ class TestInvalidInputFallsBackSilently:
         )
         assert resp.status_code == 200
         # Table must still exist and still contain all 4 rows.
-        conn = db_module.get_db()
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM expenses WHERE user_id = ?", (user_id,)
-        ).fetchone()
-        conn.close()
-        assert row["n"] == 4, "expenses table must survive an injection attempt"
+        supabase = db_module.get_client()
+        response = supabase.table("expenses").select("id").eq("user_id", user_id).execute()
+        assert len(response.data) == 4, "expenses table must survive an injection attempt"
 
     def test_non_iso_format_date_falls_back(self, user_a):
         client, _ = user_a
