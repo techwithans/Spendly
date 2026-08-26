@@ -1,13 +1,13 @@
 import calendar
 import math
 import os
-import sqlite3
 from datetime import date, datetime
 
 from flask import Flask, abort, redirect, render_template, request, session, url_for
-from werkzeug.security import check_password_hash, generate_password_hash
+from postgrest import APIError
+from supabase_auth.errors import AuthApiError
 
-from database.db import CATEGORIES, get_db, init_db, seed_db
+from database.db import CATEGORIES, get_auth_client, get_client, get_db, init_db, seed_db
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
@@ -51,28 +51,37 @@ def register():
         error = "Password must be at least 8 characters."
         return render_template("register.html", error=error, name=name, email=email)
 
-    conn = get_db()
+    supabase = get_client()
 
-    existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    existing = supabase.table("users").select("id").eq("email", email).execute().data
     if existing:
-        conn.close()
         error = "An account with this email already exists."
         return render_template("register.html", error=error, name=name, email=email)
 
-    password_hash = generate_password_hash(password)
-
+    auth_client = get_auth_client()
     try:
-        conn.execute(
-            "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
-            (name, email, password_hash),
-        )
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.close()
-        error = "An account with this email already exists."
-        return render_template("register.html", error=error, name=name, email=email)
+        response = auth_client.auth.sign_up({
+            "email": email,
+            "password": password,
+            "options": {"data": {"name": name}},
+        })
+    except AuthApiError as e:
+        if e.code in ("email_exists", "user_already_exists"):
+            error = "An account with this email already exists."
+            return render_template("register.html", error=error, name=name, email=email)
+        raise
 
-    conn.close()
+    user_id = response.user.id
+    try:
+        supabase.table("users").insert(
+            {"id": user_id, "name": name, "email": email}
+        ).execute()
+    except APIError as e:
+        if e.code == "23505":
+            error = "An account with this email already exists."
+            return render_template("register.html", error=error, name=name, email=email)
+        raise
+
     return redirect(url_for("login"))
 
 
@@ -87,16 +96,19 @@ def login():
     email = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
 
-    conn = get_db()
-    user = conn.execute("SELECT id, name, password_hash FROM users WHERE email = ?", (email,)).fetchone()
-    conn.close()
+    auth_client = get_auth_client()
+    try:
+        response = auth_client.auth.sign_in_with_password({"email": email, "password": password})
+    except AuthApiError as e:
+        if e.code in ("invalid_credentials", "email_not_confirmed"):
+            error = "Invalid email or password."
+            return render_template("login.html", error=error, email=email)
+        raise
 
-    if not user or not check_password_hash(user["password_hash"], password):
-        error = "Invalid email or password."
-        return render_template("login.html", error=error, email=email)
-
-    session["user_id"] = user["id"]
-    session["name"] = user["name"]
+    user_id = response.user.id
+    name_row = get_client().table("users").select("name").eq("id", user_id).execute().data[0]
+    session["user_id"] = user_id
+    session["name"] = name_row["name"]
     return redirect(url_for("profile"))
 
 
@@ -181,22 +193,17 @@ def _resolve_date_filter(args, presets):
     return {"start": start, "end": end, "active": active}
 
 
-def _date_filter_clause(user_id, start_date, end_date):
-    """Build a WHERE clause + params list scoping expenses to a user,
-    optionally narrowed to an inclusive date range."""
-    clause = "WHERE user_id = ?"
-    params = [user_id]
+def _apply_date_filter(query, start_date, end_date):
+    """Narrow an expenses query to an inclusive date range, if both bounds are given."""
     if start_date and end_date:
-        clause += " AND date >= ? AND date <= ?"
-        params += [start_date, end_date]
-    return clause, params
+        return query.gte("date", start_date).lte("date", end_date)
+    return query
 
 
-def _get_profile_user(conn, user_id):
+def _get_profile_user(supabase, user_id):
     """User info card: name, email, member_since, initials."""
-    row = conn.execute(
-        "SELECT name, email, created_at FROM users WHERE id = ?", (user_id,)
-    ).fetchone()
+    response = supabase.table("users").select("name, email, created_at").eq("id", user_id).execute()
+    row = response.data[0]
     initials = "".join(part[0].upper() for part in row["name"].split()[:2])
     created = datetime.strptime(row["created_at"][:10], "%Y-%m-%d")
     return {
@@ -207,7 +214,7 @@ def _get_profile_user(conn, user_id):
     }
 
 
-def _get_profile_transactions(conn, user_id, start_date=None, end_date=None):
+def _get_profile_transactions(supabase, user_id, start_date=None, end_date=None):
     """Subagent 1: most recent transactions for the profile table.
 
     Return a list of dicts shaped like:
@@ -215,13 +222,9 @@ def _get_profile_transactions(conn, user_id, start_date=None, end_date=None):
     ordered most-recent-first, limited to a small fixed count (e.g. 5).
     See .claude/specs/05-profile-backend-routes.md for the full contract.
     """
-    where_clause, params = _date_filter_clause(user_id, start_date, end_date)
-
-    rows = conn.execute(
-        f"SELECT id, date, description, category, amount FROM expenses "
-        f"{where_clause} ORDER BY date DESC, id DESC LIMIT 5",
-        params,
-    ).fetchall()
+    query = supabase.table("expenses").select("id, date, description, category, amount").eq("user_id", user_id)
+    query = _apply_date_filter(query, start_date, end_date)
+    rows = query.order("date", desc=True).order("id", desc=True).limit(5).execute().data
 
     transactions = []
     for row in rows:
@@ -240,35 +243,30 @@ def _get_profile_transactions(conn, user_id, start_date=None, end_date=None):
     return transactions
 
 
-def _get_profile_stats(conn, user_id, start_date=None, end_date=None):
+def _get_profile_stats(supabase, user_id, start_date=None, end_date=None):
     """Subagent 2: summary stats row (total_spent, transaction_count, top_category).
 
     Return a dict shaped like:
         {"total_spent": "PKR 18,240", "transaction_count": 34, "top_category": "Food"}
     Must handle the zero-expenses case without raising.
     See .claude/specs/05-profile-backend-routes.md for the full contract.
+
+    PostgREST can do SUM/GROUP BY via embedded aggregate syntax, but only
+    after a non-default per-project Postgres role setting is enabled — so
+    aggregation is done client-side here instead, over the fetched rows.
     """
-    where_clause, params = _date_filter_clause(user_id, start_date, end_date)
+    query = supabase.table("expenses").select("amount, category").eq("user_id", user_id)
+    query = _apply_date_filter(query, start_date, end_date)
+    rows = query.execute().data
 
-    total_row = conn.execute(
-        f"SELECT SUM(amount) AS total FROM expenses {where_clause}",
-        params,
-    ).fetchone()
-    total = total_row["total"] if total_row["total"] is not None else 0
+    total = sum(row["amount"] for row in rows)
     total_spent = "PKR {:,.0f}".format(total)
+    transaction_count = len(rows)
 
-    count_row = conn.execute(
-        f"SELECT COUNT(*) AS n FROM expenses {where_clause}",
-        params,
-    ).fetchone()
-    transaction_count = count_row["n"]
-
-    top_row = conn.execute(
-        f"SELECT category, SUM(amount) AS total FROM expenses "
-        f"{where_clause} GROUP BY category ORDER BY total DESC LIMIT 1",
-        params,
-    ).fetchone()
-    top_category = top_row["category"] if top_row is not None else "—"
+    category_totals = {}
+    for row in rows:
+        category_totals[row["category"]] = category_totals.get(row["category"], 0) + row["amount"]
+    top_category = max(category_totals, key=category_totals.get) if category_totals else "—"
 
     return {
         "total_spent": total_spent,
@@ -277,7 +275,7 @@ def _get_profile_stats(conn, user_id, start_date=None, end_date=None):
     }
 
 
-def _get_profile_categories(conn, user_id, start_date=None, end_date=None):
+def _get_profile_categories(supabase, user_id, start_date=None, end_date=None):
     """Subagent 3: per-category breakdown rows.
 
     Return a list of dicts shaped like:
@@ -287,15 +285,15 @@ def _get_profile_categories(conn, user_id, start_date=None, end_date=None):
     pick the nearest one to that category's percentage share of total spend.
     See .claude/specs/05-profile-backend-routes.md for the full contract.
     """
-    where_clause, params = _date_filter_clause(user_id, start_date, end_date)
+    query = supabase.table("expenses").select("amount, category").eq("user_id", user_id)
+    query = _apply_date_filter(query, start_date, end_date)
+    rows = query.execute().data
 
-    rows = conn.execute(
-        f"SELECT category, SUM(amount) AS total FROM expenses "
-        f"{where_clause} GROUP BY category ORDER BY total DESC",
-        params,
-    ).fetchall()
+    category_totals = {}
+    for row in rows:
+        category_totals[row["category"]] = category_totals.get(row["category"], 0) + row["amount"]
 
-    grand_total = sum(row["total"] for row in rows)
+    grand_total = sum(category_totals.values())
 
     bar_classes = [
         (18, "bar-w-18"),
@@ -309,12 +307,11 @@ def _get_profile_categories(conn, user_id, start_date=None, end_date=None):
         return min(bar_classes, key=lambda pair: abs(pair[0] - pct))[1]
 
     categories = []
-    for row in rows:
-        total = row["total"]
+    for category, total in sorted(category_totals.items(), key=lambda kv: kv[1], reverse=True):
         pct = (total / grand_total * 100) if grand_total else 0
         categories.append(
             {
-                "name": row["category"],
+                "name": category,
                 "amount": "PKR {:,.0f}".format(total),
                 "bar_class": _nearest_bar_class(pct),
             }
@@ -332,14 +329,12 @@ def profile():
     presets = _profile_presets()
     date_filter = _resolve_date_filter(request.args, presets)
 
-    conn = get_db()
+    supabase = get_client()
 
-    user = _get_profile_user(conn, user_id)
-    stats = _get_profile_stats(conn, user_id, date_filter["start"], date_filter["end"])
-    transactions = _get_profile_transactions(conn, user_id, date_filter["start"], date_filter["end"])
-    categories = _get_profile_categories(conn, user_id, date_filter["start"], date_filter["end"])
-
-    conn.close()
+    user = _get_profile_user(supabase, user_id)
+    stats = _get_profile_stats(supabase, user_id, date_filter["start"], date_filter["end"])
+    transactions = _get_profile_transactions(supabase, user_id, date_filter["start"], date_filter["end"])
+    categories = _get_profile_categories(supabase, user_id, date_filter["start"], date_filter["end"])
 
     return render_template(
         "profile.html",
@@ -406,14 +401,16 @@ def add_expense():
     if parsed_date > date.today():
         return _rerender("Date cannot be in the future.")
 
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO expenses (user_id, amount, category, date, description) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (session["user_id"], amount_value, category, expense_date, description or None),
-    )
-    conn.commit()
-    conn.close()
+    supabase = get_client()
+    supabase.table("expenses").insert(
+        {
+            "user_id": session["user_id"],
+            "amount": amount_value,
+            "category": category,
+            "date": expense_date,
+            "description": description or None,
+        }
+    ).execute()
 
     return redirect(url_for("profile"))
 
@@ -423,21 +420,22 @@ def edit_expense(id):
     if not session.get("user_id"):
         return redirect(url_for("login"))
 
-    conn = get_db()
-    expense = conn.execute(
-        "SELECT id, amount, category, date, description FROM expenses "
-        "WHERE id = ? AND user_id = ?",
-        (id, session["user_id"]),
-    ).fetchone()
+    supabase = get_client()
+    response = (
+        supabase.table("expenses")
+        .select("id, amount, category, date, description")
+        .eq("id", id)
+        .eq("user_id", session["user_id"])
+        .execute()
+    )
+    expense = response.data[0] if response.data else None
 
     if expense is None:
-        conn.close()
         abort(404)
 
     today = date.today().isoformat()
 
     if request.method != "POST":
-        conn.close()
         return render_template(
             "edit_expense.html",
             expense_id=id,
@@ -455,7 +453,6 @@ def edit_expense(id):
     description = request.form.get("description", "").strip()
 
     def _rerender(error):
-        conn.close()
         return render_template(
             "edit_expense.html",
             error=error,
@@ -487,13 +484,14 @@ def edit_expense(id):
     if parsed_date > date.today():
         return _rerender("Date cannot be in the future.")
 
-    conn.execute(
-        "UPDATE expenses SET amount = ?, category = ?, date = ?, description = ? "
-        "WHERE id = ? AND user_id = ?",
-        (amount_value, category, expense_date, description or None, id, session["user_id"]),
-    )
-    conn.commit()
-    conn.close()
+    supabase.table("expenses").update(
+        {
+            "amount": amount_value,
+            "category": category,
+            "date": expense_date,
+            "description": description or None,
+        }
+    ).eq("id", id).eq("user_id", session["user_id"]).execute()
 
     return redirect(url_for("profile"))
 
@@ -503,15 +501,16 @@ def delete_expense(id):
     if not session.get("user_id"):
         return redirect(url_for("login"))
 
-    conn = get_db()
-    cursor = conn.execute(
-        "DELETE FROM expenses WHERE id = ? AND user_id = ?",
-        (id, session["user_id"]),
+    supabase = get_client()
+    response = (
+        supabase.table("expenses")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", session["user_id"])
+        .execute()
     )
-    conn.commit()
-    conn.close()
 
-    if cursor.rowcount == 0:
+    if not response.data:
         abort(404)
 
     return redirect(url_for("profile"))
@@ -521,4 +520,6 @@ if __name__ == "__main__":
     with app.app_context():
         init_db()
         seed_db()
-    app.run(debug=True, port=5001)
+    port = int(os.environ.get("PORT", 5001))
+    debug = os.environ.get("PORT") is None
+    app.run(host="0.0.0.0", port=port, debug=debug)
