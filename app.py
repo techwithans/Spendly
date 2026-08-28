@@ -1,21 +1,32 @@
 import calendar
+import io
 import math
 import os
+import time
 from datetime import date, datetime
 
 from flask import Flask, abort, redirect, render_template, request, session, url_for
+from PIL import Image, UnidentifiedImageError
 from postgrest import APIError
 from supabase_auth.errors import AuthApiError
 
-from database.db import CATEGORIES, get_auth_client, get_client, get_db, init_db, seed_db
+from database.db import CATEGORIES, ensure_avatars_bucket, get_auth_client, get_client, get_db, init_db, seed_db
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB cap on profile picture uploads
 
 
 # ------------------------------------------------------------------ #
 # Routes                                                              #
 # ------------------------------------------------------------------ #
+
+@app.errorhandler(413)
+def too_large(e):
+    if session.get("user_id"):
+        return _render_profile_page(session["user_id"], error="Image must be smaller than 5 MB."), 413
+    return e
+
 
 @app.route("/")
 def landing():
@@ -194,8 +205,8 @@ def _apply_date_filter(query, start_date, end_date):
 
 
 def _get_profile_user(supabase, user_id):
-    """User info card: name, email, member_since, initials."""
-    response = supabase.table("users").select("name, email, created_at").eq("id", user_id).execute()
+    """User info card: name, email, member_since, initials, avatar_url."""
+    response = supabase.table("users").select("name, email, created_at, avatar_url").eq("id", user_id).execute()
     row = response.data[0]
     initials = "".join(part[0].upper() for part in row["name"].split()[:2])
     created = datetime.strptime(row["created_at"][:10], "%Y-%m-%d")
@@ -204,6 +215,7 @@ def _get_profile_user(supabase, user_id):
         "email": row["email"],
         "member_since": created.strftime("%B %Y"),
         "initials": initials,
+        "avatar_url": row.get("avatar_url"),
     }
 
 
@@ -415,12 +427,7 @@ def _analytics_biggest(rows):
     }
 
 
-@app.route("/profile")
-def profile():
-    if not session.get("user_id"):
-        return redirect(url_for("login"))
-
-    user_id = session["user_id"]
+def _render_profile_page(user_id, error=None):
     presets = _profile_presets()
     date_filter = _resolve_date_filter(request.args, presets)
 
@@ -439,7 +446,79 @@ def profile():
         categories=categories,
         date_filter=date_filter,
         presets=presets,
+        error=error,
     )
+
+
+@app.route("/profile")
+def profile():
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    return _render_profile_page(session["user_id"])
+
+
+@app.route("/profile/picture", methods=["POST"])
+def upload_profile_picture():
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    user_id = session["user_id"]
+    file = request.files.get("picture")
+
+    if not file or not file.filename:
+        return _render_profile_page(user_id, error="Choose an image to upload.")
+
+    try:
+        image = Image.open(file)
+        image.verify()
+    except (UnidentifiedImageError, OSError):
+        return _render_profile_page(user_id, error="That file isn't a valid image.")
+
+    file.seek(0)
+    image = Image.open(file)
+    if image.format not in ("JPEG", "PNG", "WEBP"):
+        return _render_profile_page(user_id, error="Only JPEG, PNG, or WEBP images are allowed.")
+
+    image = image.convert("RGB")
+    image.thumbnail((512, 512))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=85)
+    buffer.seek(0)
+
+    supabase = get_client()
+    path = f"{user_id}.jpg"
+    supabase.storage.from_("avatars").upload(
+        path,
+        buffer.read(),
+        {"content-type": "image/jpeg", "upsert": "true"},
+    )
+    public_url = supabase.storage.from_("avatars").get_public_url(path)
+    # The storage path doesn't change on re-upload, so bust any cached copy
+    # of the old image at that same URL.
+    public_url = f"{public_url}?t={int(time.time())}"
+
+    supabase.table("users").update({"avatar_url": public_url}).eq("id", user_id).execute()
+
+    return redirect(url_for("profile"))
+
+
+@app.route("/profile/picture/remove", methods=["POST"])
+def remove_profile_picture():
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    user_id = session["user_id"]
+    supabase = get_client()
+
+    try:
+        supabase.storage.from_("avatars").remove([f"{user_id}.jpg"])
+    except Exception:
+        pass  # nothing stored for this user — removal is best-effort
+
+    supabase.table("users").update({"avatar_url": None}).eq("id", user_id).execute()
+
+    return redirect(url_for("profile"))
 
 
 @app.route("/analytics")
@@ -641,6 +720,7 @@ def delete_expense(id):
 if __name__ == "__main__":
     with app.app_context():
         init_db()
+        ensure_avatars_bucket()
         seed_db()
     port = int(os.environ.get("PORT", 5001))
     debug = os.environ.get("PORT") is None

@@ -623,6 +623,60 @@ img, svg { max-width: 100%; height: auto; }
     flex-shrink: 0;
 }
 
+img.profile-avatar { object-fit: cover; }
+
+.avatar-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.avatar-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.avatar-edit-btn {
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--ink);
+    color: var(--paper);
+    border: 2px solid var(--paper-card);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.avatar-edit-btn:hover { background: var(--accent); }
+
+.avatar-edit-btn svg { width: 14px; height: 14px; }
+
+.avatar-remove-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    margin-top: 0.4rem;
+    font-family: var(--font-body);
+    font-size: 0.78rem;
+    color: var(--ink-muted);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.avatar-remove-btn:hover { color: var(--danger); }
+
 .profile-name {
     font-family: var(--font-display);
     font-size: 1.5rem;

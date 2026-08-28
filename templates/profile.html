@@ -7,12 +7,35 @@
 <section class="profile-section">
     <div class="profile-container">
 
+        {% if error %}
+        <div class="auth-error">{{ error }}</div>
+        {% endif %}
+
         <div class="profile-header">
-            <div class="profile-avatar">{{ user.initials }}</div>
+            <div class="avatar-wrap">
+                {% if user.avatar_url %}
+                <img class="profile-avatar" src="{{ user.avatar_url }}" alt="{{ user.name }}'s profile picture">
+                {% else %}
+                <div class="profile-avatar">{{ user.initials }}</div>
+                {% endif %}
+                <form method="post" action="{{ url_for('upload_profile_picture') }}" enctype="multipart/form-data">
+                    <label for="avatar-input" class="avatar-edit-btn" aria-label="Change profile picture">
+                        <i data-lucide="camera"></i>
+                    </label>
+                    <input type="file" id="avatar-input" name="picture" accept="image/*"
+                           class="avatar-input" onchange="this.form.submit()">
+                </form>
+            </div>
             <div>
                 <h1 class="profile-name">{{ user.name }}</h1>
                 <p class="profile-email">{{ user.email }}</p>
                 <p class="profile-since">Member since {{ user.member_since }}</p>
+                {% if user.avatar_url %}
+                <form method="post" action="{{ url_for('remove_profile_picture') }}"
+                      onsubmit="return confirm('Remove your profile picture?')">
+                    <button type="submit" class="avatar-remove-btn">Remove photo</button>
+                </form>
+                {% endif %}
             </div>
             <a href="{{ url_for('add_expense') }}" class="btn-primary profile-header-action">Add Expense</a>
         </div>

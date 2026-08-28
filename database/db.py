@@ -50,6 +50,7 @@ def init_db():
             created_at TEXT NOT NULL DEFAULT (now()::text)
         )
     """)
+    cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
             id SERIAL PRIMARY KEY,
@@ -63,6 +64,20 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+
+
+def ensure_avatars_bucket():
+    """Create the public 'avatars' Storage bucket if it doesn't already exist.
+
+    Safe to call on every startup — Storage buckets aren't SQL DDL, so this
+    can't go through init_db()/get_db(); it uses the Supabase REST client
+    instead, same as everything else besides table creation."""
+    supabase = get_client()
+    try:
+        supabase.storage.create_bucket("avatars", options={"public": True})
+    except Exception as e:
+        if "already exists" not in str(e).lower():
+            raise
 
 
 def seed_db():
