@@ -118,13 +118,6 @@ def logout():
     return redirect(url_for("landing"))
 
 
-@app.route("/analytics")
-def analytics():
-    if not session.get("user_id"):
-        return redirect(url_for("login"))
-    return render_template("analytics.html")
-
-
 @app.route("/terms")
 def terms():
     return render_template("terms.html")
@@ -320,6 +313,108 @@ def _get_profile_categories(supabase, user_id, start_date=None, end_date=None):
     return categories
 
 
+# ------------------------------------------------------------------ #
+# Analytics data helpers (see .claude/specs/11-analytics-page.md)     #
+# ------------------------------------------------------------------ #
+
+def _nearest_height_class(pct):
+    """Snap a 0-100 percentage to the nearest `bar-h-<n>` class (steps of 5)."""
+    n = max(0, min(100, int(round(pct / 5.0)) * 5))
+    return f"bar-h-{n}"
+
+
+def _analytics_summary(rows):
+    """Headline stat row: total spend, transaction count, mean per
+    transaction, and mean per calendar month that has any spend."""
+    total = sum(row["amount"] for row in rows)
+    count = len(rows)
+    months = {row["date"][:7] for row in rows}
+
+    avg_transaction = total / count if count else 0
+    avg_monthly = total / len(months) if months else 0
+
+    return {
+        "total_spent": "PKR {:,.0f}".format(total),
+        "transaction_count": count,
+        "avg_transaction": "PKR {:,.0f}".format(avg_transaction),
+        "avg_monthly": "PKR {:,.0f}".format(avg_monthly),
+    }
+
+
+def _analytics_monthly(rows):
+    """Last 6 calendar months (oldest first, current month last), each with
+    its formatted total and a `bar-h-<n>` class sized against the tallest
+    month in the window."""
+    today = date.today()
+    buckets = []
+    for offset in range(5, -1, -1):
+        month = _shift_months(today, offset)
+        buckets.append({"key": month.strftime("%Y-%m"), "label": month.strftime("%b"), "total": 0.0})
+
+    by_key = {bucket["key"]: bucket for bucket in buckets}
+    for row in rows:
+        bucket = by_key.get(row["date"][:7])
+        if bucket is not None:
+            bucket["total"] += row["amount"]
+
+    peak = max((bucket["total"] for bucket in buckets), default=0)
+
+    return [
+        {
+            "label": bucket["label"],
+            "amount": "PKR {:,.0f}".format(bucket["total"]),
+            "bar_class": _nearest_height_class(bucket["total"] / peak * 100 if peak else 0),
+        }
+        for bucket in buckets
+    ]
+
+
+def _analytics_month_comparison(rows):
+    """This month's total vs last month's, with an integer percentage change
+    and an up/down/flat trend flag. `change_pct` is 0 when last month had no
+    spend (no meaningful ratio)."""
+    today = date.today()
+    this_key = today.strftime("%Y-%m")
+    last_key = _shift_months(today, 1).strftime("%Y-%m")
+
+    this_total = sum(row["amount"] for row in rows if row["date"][:7] == this_key)
+    last_total = sum(row["amount"] for row in rows if row["date"][:7] == last_key)
+
+    if last_total:
+        change_pct = int(round(abs(this_total - last_total) / last_total * 100))
+    else:
+        change_pct = 0
+
+    if this_total > last_total:
+        trend = "up"
+    elif this_total < last_total:
+        trend = "down"
+    else:
+        trend = "flat"
+
+    return {
+        "this_month": "PKR {:,.0f}".format(this_total),
+        "last_month": "PKR {:,.0f}".format(last_total),
+        "change_pct": change_pct,
+        "trend": trend,
+    }
+
+
+def _analytics_biggest(rows):
+    """The user's single largest expense, or None if they have none."""
+    if not rows:
+        return None
+
+    row = max(rows, key=lambda r: r["amount"])
+    d = datetime.strptime(row["date"], "%Y-%m-%d")
+    return {
+        "amount": "PKR {:,.0f}".format(row["amount"]),
+        "category": row["category"],
+        "description": row["description"] or "—",
+        "date": f"{d.strftime('%b')} {d.day}",
+    }
+
+
 @app.route("/profile")
 def profile():
     if not session.get("user_id"):
@@ -344,6 +439,33 @@ def profile():
         categories=categories,
         date_filter=date_filter,
         presets=presets,
+    )
+
+
+@app.route("/analytics")
+def analytics():
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    user_id = session["user_id"]
+    supabase = get_client()
+
+    rows = (
+        supabase.table("expenses")
+        .select("amount, category, date, description")
+        .eq("user_id", user_id)
+        .execute()
+        .data
+    )
+
+    return render_template(
+        "analytics.html",
+        has_data=bool(rows),
+        summary=_analytics_summary(rows),
+        monthly=_analytics_monthly(rows),
+        categories=_get_profile_categories(supabase, user_id),
+        comparison=_analytics_month_comparison(rows),
+        biggest=_analytics_biggest(rows),
     )
 
 
