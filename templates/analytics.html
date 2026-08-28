@@ -4,42 +4,110 @@
 
 {% block content %}
 
-<section class="coming-soon-section">
-    <div class="coming-soon-card">
+<section class="profile-section">
+    <div class="profile-container">
 
-        <div class="coming-soon-icon">
-            <i data-lucide="rocket"></i>
+        <div class="profile-header">
+            <div>
+                <h1 class="profile-name">Analytics</h1>
+                <p class="profile-since">Your spending at a glance</p>
+            </div>
+            <a href="{{ url_for('add_expense') }}" class="btn-primary profile-header-action">Add Expense</a>
         </div>
 
-        <h1 class="coming-soon-title">Coming Soon</h1>
-        <p class="coming-soon-tag">Advanced Analytics</p>
+        {% if not has_data %}
 
-        <p class="coming-soon-desc">
-            Get deeper insights into your spending habits with AI-powered
-            analytics, custom reports, and predictive budgeting.
-        </p>
+        <div class="profile-panel analytics-empty">
+            <p>No expenses yet — add one to see your analytics.</p>
+            <a href="{{ url_for('add_expense') }}" class="btn-primary">Add Expense</a>
+        </div>
 
-        <div class="coming-soon-features">
-            <div class="coming-soon-feature">
-                <span class="coming-soon-feature-icon"><i data-lucide="check"></i></span>
-                <span>AI Spending Insights</span>
+        {% else %}
+
+        <div class="analytics-stats">
+            <div class="stat-tile">
+                <span class="stat-label"><i data-lucide="wallet" class="stat-icon"></i>Total spent</span>
+                <span class="stat-value">{{ summary.total_spent }}</span>
             </div>
-            <div class="coming-soon-feature">
-                <span class="coming-soon-feature-icon"><i data-lucide="check"></i></span>
-                <span>Custom Report Builder</span>
+            <div class="stat-tile">
+                <span class="stat-label"><i data-lucide="credit-card" class="stat-icon"></i>Transactions</span>
+                <span class="stat-value">{{ summary.transaction_count }}</span>
             </div>
-            <div class="coming-soon-feature">
-                <span class="coming-soon-feature-icon"><i data-lucide="check"></i></span>
-                <span>Predictive Budgeting</span>
+            <div class="stat-tile">
+                <span class="stat-label"><i data-lucide="receipt" class="stat-icon"></i>Avg transaction</span>
+                <span class="stat-value">{{ summary.avg_transaction }}</span>
             </div>
-            <div class="coming-soon-feature">
-                <span class="coming-soon-feature-icon"><i data-lucide="check"></i></span>
-                <span>Export &amp; Share</span>
+            <div class="stat-tile">
+                <span class="stat-label"><i data-lucide="calendar" class="stat-icon"></i>Avg monthly</span>
+                <span class="stat-value">{{ summary.avg_monthly }}</span>
             </div>
         </div>
 
-        <a href="#" class="btn-primary coming-soon-cta">Notify Me When It's Ready</a>
-        <a href="{{ url_for('profile') }}" class="coming-soon-back">Back to Dashboard</a>
+        <div class="profile-panel">
+            <h2 class="panel-title"><i data-lucide="bar-chart-3" class="panel-icon"></i>Spending trend</h2>
+            <div class="trend-chart">
+                {% for month in monthly %}
+                <div class="trend-col">
+                    <span class="trend-amount">{{ month.amount }}</span>
+                    <div class="trend-bar-track">
+                        <div class="trend-bar {{ month.bar_class }}"></div>
+                    </div>
+                    <span class="trend-label">{{ month.label }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="profile-panel">
+            <h2 class="panel-title"><i data-lucide="pie-chart" class="panel-icon"></i>Category breakdown</h2>
+            <div class="category-breakdown">
+                {% for cat in categories %}
+                <div class="category-row">
+                    <span class="category-name">{{ cat.name }}</span>
+                    <div class="category-bar-track">
+                        <div class="category-bar cat-{{ cat.name|lower }} {{ cat.bar_class }}"></div>
+                    </div>
+                    <span class="category-amount">{{ cat.amount }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="profile-panel">
+            <h2 class="panel-title"><i data-lucide="calendar-range" class="panel-icon"></i>This month vs last month</h2>
+            <div class="month-compare">
+                <div class="month-compare-tile">
+                    <span class="stat-label">This month</span>
+                    <span class="stat-value">{{ comparison.this_month }}</span>
+                </div>
+                <div class="month-compare-tile">
+                    <span class="stat-label">Last month</span>
+                    <span class="stat-value">{{ comparison.last_month }}</span>
+                </div>
+                <div class="month-change trend-{{ comparison.trend }}">
+                    {% if comparison.trend == 'up' %}
+                    <i data-lucide="trending-up"></i>
+                    {% elif comparison.trend == 'down' %}
+                    <i data-lucide="trending-down"></i>
+                    {% else %}
+                    <i data-lucide="minus"></i>
+                    {% endif %}
+                    <span>{{ comparison.change_pct }}%</span>
+                </div>
+            </div>
+
+            {% if biggest %}
+            <div class="biggest-expense">
+                <span class="biggest-label">Biggest expense</span>
+                <span class="biggest-amount">{{ biggest.amount }}</span>
+                <span class="category-badge cat-{{ biggest.category|lower }}">{{ biggest.category }}</span>
+                <span class="biggest-desc">{{ biggest.description }}</span>
+                <span class="biggest-date">{{ biggest.date }}</span>
+            </div>
+            {% endif %}
+        </div>
+
+        {% endif %}
 
     </div>
 </section>
